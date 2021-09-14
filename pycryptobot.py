@@ -863,11 +863,13 @@ def executeJob(sc=None, app: PyCryptoBot=None, state: AppState=None, trading_dat
                 else:
                     filename = tradesfile
                 try:
-                    if not os.path.exists("csv"):
-                        os.makedirs("csv")
-                    app.trade_tracker.to_csv("./csv/" + filename)
+                    if not os.path.isabs(filename):
+                        if not os.path.exists("csv"):
+                            os.makedirs("csv")
+                        filename = os.path.join(os.curdir, 'csv', filename)
+                    app.trade_tracker.to_csv(filename)
                 except OSError:
-                    Logger.critical(f"Unable to save: /csv/{filename}")
+                    Logger.critical(f"Unable to save: {filename}")
 
                 if state.buy_count == 0:
                     state.last_buy_size = 0
@@ -960,6 +962,8 @@ def main():
             message += 'Coinbase Pro bot'
         elif app.getExchange() == 'binance':
             message += 'Binance bot'
+        elif app.getExchange() == 'kucoin':
+            message += 'Kucoin bot'
 
         smartSwitchStatus = 'enabled' if app.getSmartSwitch() else 'disabled'
         message += f' for {app.getMarket()} using granularity {app.printGranularity()}. Smartswitch {smartSwitchStatus}'

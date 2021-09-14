@@ -9,7 +9,8 @@ from urllib3.exceptions import ReadTimeoutError
 from models.Trading import TechnicalAnalysis
 from models.exchange.binance import AuthAPI as BAuthAPI, PublicAPI as BPublicAPI
 from models.exchange.coinbase_pro import AuthAPI as CBAuthAPI, PublicAPI as CBPublicAPI
-from models.config import binanceParseMarket, coinbaseProParseMarket
+from models.exchange.kucoin import AuthAPI as KAuthAPI, PublicAPI as KPublicAPI
+from models.config import binanceParseMarket, coinbaseProParseMarket, kucoinParseMarket
 from models.helper.LogHelper import Logger
 from models.helper.TextBoxHelper import TextBox
 from models.BotConfig import BotConfig
@@ -17,16 +18,16 @@ from models.BotConfig import BotConfig
 # disable insecure ssl warning
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-
 def to_coinbase_pro_granularity(granularity: int) -> int:
     return granularity
-
 
 def to_binance_granularity(granularity: int) -> str:
     return {60: "1m", 300: "5m", 900: "15m", 3600: "1h", 21600: "6h", 86400: "1d"}[
         granularity
     ]
 
+def to_kucoin_granularity(granularity: int) -> str:
+    return {60: '1min', 300: '5min', 900: '15min', 1800: '30min', 3600: '1hour', 21600: '6hour', 86400: '1day'}[granularity]
 
 #  pylint: disable=unsubscriptable-object
 def truncate(f: Union[int, float], n: Union[int, float]) -> str:
@@ -74,14 +75,14 @@ class PyCryptoBot(BotConfig):
     )
 
     def _isCurrencyValid(self, currency):
-        if self.exchange == "coinbasepro" or self.exchange == "binance":
+        if self.exchange == "coinbasepro" or self.exchange == "binance" or self.exchange == 'kucoin':
             p = re.compile(r"^[1-9A-Z]{2,5}$")
             return p.match(currency)
 
         return False
 
     def _isMarketValid(self, market):
-        if self.exchange == "coinbasepro":
+        if self.exchange == "coinbasepro" or self.exchange == "kucoin":
             p = re.compile(r"^[1-9A-Z]{2,5}\-[1-9A-Z]{2,5}$")
             return p.match(market)
         elif self.exchange == "binance":
@@ -143,6 +144,8 @@ class PyCryptoBot(BotConfig):
             return df.tail(1)
 
     def printGranularity(self) -> str:
+        if self.exchange == "kucoin":
+            return to_kucoin_granularity(self.granularity)
         if self.exchange == "binance":
             return to_binance_granularity(self.granularity)
         if self.exchange == "coinbasepro":
@@ -205,6 +208,15 @@ class PyCryptoBot(BotConfig):
                 return api.getHistoricalData(
                     market, to_binance_granularity(granularity)
                 )
+        elif self.exchange == 'kucoin': # returns data from coinbase if not specified
+            api = KPublicAPI(api_url=self.getAPIURL())
+
+            if iso8601start != '' and iso8601end == '':
+                return api.getHistoricalData(market, to_kucoin_granularity(granularity), iso8601start)
+            elif iso8601start != '' and iso8601end != '':
+                return api.getHistoricalData(market, to_kucoin_granularity(granularity), iso8601start, iso8601end)
+            else:
+                return api.getHistoricalData(market, to_kucoin_granularity(granularity))
         else:  # returns data from coinbase if not specified
             api = CBPublicAPI()
 
@@ -263,7 +275,7 @@ class PyCryptoBot(BotConfig):
                     textBox.center(f"*** Getting ({str(granularity)}) market data ***")
 
                 df_first = simend
-                df_first -= timedelta(minutes=(200 * (granularity / 60)))
+                df_first -= timedelta(minutes=((granularity / 60)*200))
                 df1 = self.getHistoricalData(
                     market,
                     granularity,
@@ -275,18 +287,14 @@ class PyCryptoBot(BotConfig):
                 originalSimStart = self.getDateFromISO8601Str(str(simstart))
                 addingExtraCandles = False
                 while df_first.isoformat(timespec="milliseconds") > simstart.isoformat(
-                    timespec="milliseconds"
-                ) or df_first.isoformat(
-                    timespec="milliseconds"
-                ) > originalSimStart.isoformat(
-                    timespec="milliseconds"
-                ):
+                    timespec="milliseconds") or df_first.isoformat(
+                    timespec="milliseconds") > originalSimStart.isoformat(
+                    timespec="milliseconds"):
+
                     end_date = df_first
                     df_first -= timedelta(minutes=(300 * (granularity / 60)))
 
-                    if df_first.isoformat(timespec="milliseconds") < simstart.isoformat(
-                        timespec="milliseconds"
-                    ):
+                    if df_first.isoformat(timespec="milliseconds") < simstart.isoformat(timespec="milliseconds"):
                         df_first = self.getDateFromISO8601Str(str(simstart))
 
                     df2 = self.getHistoricalData(
@@ -308,8 +316,7 @@ class PyCryptoBot(BotConfig):
 
                     # create df with 300 candles before the required startdate to match live
                     if df_first.isoformat(
-                        timespec="milliseconds"
-                    ) == simstart.isoformat(timespec="milliseconds"):
+                        timespec="milliseconds") == simstart.isoformat(timespec="milliseconds"):
                         if addingExtraCandles == False:
                             simstart -= timedelta(minutes=(300 * (granularity / 60)))
                         addingExtraCandles = True
@@ -443,6 +450,10 @@ class PyCryptoBot(BotConfig):
                 api = BPublicAPI(api_url=self.getAPIURL())
                 df_data = api.getHistoricalData(self.market, "1h")
                 self.ema1226_1h_cache = df_data
+            elif self.exchange == "kucoin":
+                api = KPublicAPI(api_url=self.getAPIURL())
+                df_data = api.getHistoricalData(self.market, "1hour")
+                self.ema1226_1h_cache = df_data
             else:
                 return False
 
@@ -475,6 +486,10 @@ class PyCryptoBot(BotConfig):
                 api = BPublicAPI(api_url=self.getAPIURL())
                 df_data = api.getHistoricalData(self.market, "1h")
                 self.sma50200_1h_cache = df_data
+            elif self.exchange == "kucoin":
+                api = KPublicAPI(api_url=self.getAPIURL())
+                df_data = api.getHistoricalData(self.market, "1hour")
+                self.sma50200_1h_cache = df_data
             else:
                 return False
 
@@ -501,6 +516,9 @@ class PyCryptoBot(BotConfig):
             elif self.exchange == "binance":
                 api = BPublicAPI(api_url=self.getAPIURL())
                 df_data = api.getHistoricalData(self.market, "1d")
+            elif self.exchange == "kucoin":
+                api = KPublicAPI(api_url=self.getAPIURL())
+                df_data = api.getHistoricalData(self.market, "1day")
             else:
                 return False  # if there is an API issue, default to False to avoid hard sells
 
@@ -531,6 +549,10 @@ class PyCryptoBot(BotConfig):
                 api = BPublicAPI(api_url=self.getAPIURL())
                 df_data = api.getHistoricalData(self.market, "6h")
                 self.ema1226_6h_cache = df_data
+            elif self.exchange == "kucoin":
+                api = KPublicAPI(api_url=self.getAPIURL())
+                df_data = api.getHistoricalData(self.market, "6hour")
+                self.ema1226_6h_cache = df_data
             else:
                 return False
 
@@ -557,6 +579,9 @@ class PyCryptoBot(BotConfig):
             elif self.exchange == "binance":
                 api = BPublicAPI(api_url=self.getAPIURL())
                 df_data = api.getHistoricalData(self.market, "6h")
+            elif self.exchange == "kucoin":
+                api = KPublicAPI(api_url=self.getAPIURL())
+                df_data = api.getHistoricalData(self.market, "6hour")
             else:
                 return False
 
@@ -573,6 +598,9 @@ class PyCryptoBot(BotConfig):
         if self.exchange == "binance":
             api = BPublicAPI(api_url=self.getAPIURL())
             return api.getTicker(market)
+        elif self.exchange == 'kucoin':
+            api = KPublicAPI(api_url=self.getAPIURL())
+            return api.getTicker(market)
         else:  # returns data from coinbase if not specified
             api = CBPublicAPI()
             return api.getTicker(market)
@@ -580,6 +608,8 @@ class PyCryptoBot(BotConfig):
     def getTime(self):
         if self.exchange == "coinbasepro":
             return CBPublicAPI().getTime()
+        elif self.exchange == 'kucoin':
+            return KPublicAPI(api_url=self.getAPIURL()).getTime()
         elif self.exchange == "binance":
             try:
                 return BPublicAPI().getTime()
@@ -737,6 +767,37 @@ class PyCryptoBot(BotConfig):
                         )[0]
                     ),
                 }
+            elif self.exchange == "kucoin":
+                api = KAuthAPI(
+                    self.getAPIKey(),
+                    self.getAPISecret(),
+                    self.getAPIPassphrase(),
+                    self.getAPIURL(),
+                )
+                orders = api.getOrders(self.getMarket(), "", "done")
+
+                if len(orders) == 0:
+                    return None
+
+                last_order = orders.tail(1)
+                if last_order["action"].values[0] != "buy":
+                    return None
+
+                return {
+                    "side": "buy",
+                    "market": self.getMarket(),
+                    "size": float(last_order["size"]),
+                    "filled": float(last_order["filled"]),
+                    "price": float(last_order["price"]),
+                    "fee": float(last_order["fees"]),
+                    "date": str(
+                        pd.DatetimeIndex(
+                            pd.to_datetime(last_order["created_at"]).dt.strftime(
+                                "%Y-%m-%dT%H:%M:%S.%Z"
+                            )
+                        )[0]
+                    ),
+                }
             elif self.exchange == "binance":
                 api = BAuthAPI(
                     self.getAPIKey(),
@@ -778,6 +839,8 @@ class PyCryptoBot(BotConfig):
             return 0.005  # default lowest fee tier
         elif self.isSimulation() is True and self.exchange == "binance":
             return 0.001  # default lowest fee tier
+        elif self.isSimulation() is True and self.exchange == "kucoin":
+            return 0.0015  # default lowest fee tier
         elif self.exchange == "coinbasepro":
             api = CBAuthAPI(
                 self.getAPIKey(),
@@ -792,6 +855,14 @@ class PyCryptoBot(BotConfig):
                 self.getAPISecret(),
                 self.getAPIURL(),
                 recv_window=self.recv_window,
+            )
+            return api.getTakerFee()
+        elif self.exchange == "kucoin":
+            api = KAuthAPI(
+                self.getAPIKey(),
+                self.getAPISecret(),
+                self.getAPIPassphrase(),
+                self.getAPIURL(),
             )
             return api.getTakerFee()
         else:
@@ -814,6 +885,14 @@ class PyCryptoBot(BotConfig):
                 recv_window=self.recv_window,
             )
             return api.getMakerFee()
+        elif self.exchange == "kucoin":
+            api = KAuthAPI(
+                self.getAPIKey(),
+                self.getAPISecret(),
+                self.getAPIPassphrase(),
+                self.getAPIURL(),
+            )
+            return api.getMakerFee() 
         else:
             return 0.005
 
@@ -829,6 +908,14 @@ class PyCryptoBot(BotConfig):
                     self.getAPISecret(),
                     self.getAPIPassphrase(),
                     self.getAPIURL(),
+                )
+                return api.marketBuy(market, float(truncate(quote_currency, 2)))
+            elif self.exchange == 'kucoin':
+                api = KAuthAPI(
+                    self.getAPIKey(), 
+                    self.getAPISecret(), 
+                    self.getAPIPassphrase(), 
+                    self.getAPIURL()
                 )
                 return api.marketBuy(market, float(truncate(quote_currency, 2)))
             elif self.exchange == "binance":
@@ -863,6 +950,14 @@ class PyCryptoBot(BotConfig):
                         recv_window=self.recv_window,
                     )
                     return api.marketSell(market, base_currency)
+                elif self.exchange == 'kucoin':
+                    api = KAuthAPI(
+                        self.getAPIKey(), 
+                        self.getAPISecret(), 
+                        self.getAPIPassphrase(), 
+                        self.getAPIURL()
+                        )
+                    return api.marketSell(market, base_currency)
             else:
                 return None
 
@@ -878,6 +973,13 @@ class PyCryptoBot(BotConfig):
                 self.base_currency,
                 self.quote_currency,
             ) = coinbaseProParseMarket(market)
+
+        elif self.exchange == 'kucoin':
+            (
+                self.market, 
+                self.base_currency, 
+                self.quote_currency
+            ) = kucoinParseMarket(market)
 
         return (self.market, self.base_currency, self.quote_currency)
 
@@ -992,6 +1094,7 @@ class PyCryptoBot(BotConfig):
                 tradingData = pd.DataFrame()
 
                 startDate = self.getDateFromISO8601Str(str(datetime.now()))
+                startDate -= timedelta(minutes=(self.getGranularity()/60)*2)
                 endDate = startDate
                 startDate = pd.Series(startDate).dt.round(freq="H")[0]
                 endDate = pd.Series(endDate).dt.round(freq="H")[0]
