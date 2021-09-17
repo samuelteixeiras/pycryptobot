@@ -469,3 +469,10 @@ I've actually included this in the examples in how to start the bot that will do
 If you get stuck with anything email me or raise an issue in the repo and I'll help you sort it out. Raising an issue is probably better as the question and response may help others.
 
 Enjoy and happy trading! :)
+
+
+--
+
+How I was running
+
+python3 pycryptobot.py --exchange coinbasepro --market BTC-EUR --granularity 86400 --verbose 0  --selllowerpcnt -25 --graphs 1 
